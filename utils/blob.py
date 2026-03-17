@@ -1,7 +1,8 @@
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 import numpy as np
 from .image import gaussian_blur, image_to_binary, sobel_filter, write_image
+from .color_space import rgb_to_oklab
 
 @dataclass
 class Blob:
@@ -43,13 +44,15 @@ def get_blob_center(blob_image):
     
     return np.sum(x_coords) / sample_count, np.sum(y_coords) / sample_count
 
-def blobize(image, gradient_image, threshold=0.1) -> list[Blob]:
+def blobize(image, gradient_image, threshold=0.1, debug=False) -> list[Blob]:
     
     magnitude = np.sqrt(np.sum(gradient_image**2, axis=-1))
     edge_image = (magnitude * 255).astype(np.uint8)
-    write_image("outputs/edge_image.png", edge_image)
+    if debug:
+        write_image("edge_image.png", edge_image)
     edge_image = image_to_binary(edge_image, threshold)
-    write_image("outputs/edge_image_binary.png", edge_image)
+    if debug:
+        write_image("edge_image_binary.png", edge_image)
     
     visited = np.zeros(image.shape[:2], dtype=np.bool)
     
@@ -109,6 +112,63 @@ def blobize(image, gradient_image, threshold=0.1) -> list[Blob]:
 
 def filter_blobs_by_pixel_count(blobs: List[Blob], min_pixel_count: int):
     return [blob for blob in blobs if np.sum(blob.blob_image[:, :, 3] == 255) > min_pixel_count]
+
+def get_blob_average_color_oklab(blob: Blob) -> np.ndarray:
+    mask = blob.blob_image[:, :, 3] == 255
+    if not np.any(mask):
+        return np.array([0.0, 0.0, 0.0])
+    
+    # Extract RGB values of valid pixels
+    rgb_pixels = blob.blob_image[:, :, :3][mask]
+    
+    # Convert to OKLAB
+    oklab_pixels = rgb_to_oklab(rgb_pixels)
+    
+    # Compute average
+    return np.mean(oklab_pixels, axis=0)
+
+def get_blob_by_color(blobs: List[Blob], color: tuple[int, int, int], threshold: Optional[float] = None) -> Optional[Blob]:
+    """Find the blob whose average color is closest to the input color in OKLAB space.
+    
+    Args:
+        blobs: List of blobs to search through
+        color: Target RGB color as (R, G, B) tuple with values 0-255
+        threshold: Maximum OKLAB distance to consider a match. If None, always
+                   returns the closest blob. Typical values: 0.05 (strict) to 0.2 (loose)
+    
+    Returns:
+        The blob with average color closest to the target, or None if blobs is empty
+        or no blob is within the threshold distance
+    """
+    if not blobs:
+        return None
+    
+    # Convert target color to OKLAB
+    target_oklab = rgb_to_oklab(np.array(color))
+    
+    min_distance = float('inf')
+    closest_blob = None
+    
+    for blob in blobs:
+        blob_oklab = get_blob_average_color_oklab(blob)
+        
+        distance = np.sqrt(np.sum((blob_oklab - target_oklab) ** 2))
+        
+        if distance < min_distance:
+            min_distance = distance
+            closest_blob = blob
+    
+    # Apply threshold filter
+    if threshold is not None and min_distance > threshold:
+        return None
+    
+    return closest_blob
+
+def is_blob_moving(blob1: Blob, blob2: Blob, threshold: float = 1):
+    center_dist = blob_distance(blob1.center, blob2.center)
+    if center_dist > threshold:
+        return True
+    return False
 
 def blob_distance(center1, center2):
     x1, y1 = center1

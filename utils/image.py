@@ -27,7 +27,7 @@ def read_image(path):
     return sk.io.imread(path)
 
 def write_image(path, image):
-    sk.io.imsave(path, image.astype(np.uint8))
+    sk.io.imsave(path, image.astype(np.uint8), check_contrast=False)
 
 def resize_image(image, new_w, new_h):
     old_h, old_w = image.shape[:2]

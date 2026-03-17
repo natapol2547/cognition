@@ -5,16 +5,24 @@ from utils.image import (
     resize_image,
     sobel_filter,
 )
-from utils.color_space import rgb_to_oklch
+from utils.color_space import rgb_to_oklab, rgb_to_oklch
 from utils.blob import blobize, group_blobs
+
+import numpy as np
 import time
+
+DEBUG = True
 
 def find_gradient(image):
     blurred_image = gaussian_blur(image, 5)
+    write_image("outputs/blurred_image.png", blurred_image)
+    oklab_image = rgb_to_oklab(blurred_image)
     oklch_image = rgb_to_oklch(blurred_image)
-    oklc_image = oklch_image[..., :2]
-    oklc_image[..., 1] = oklc_image[..., 1] / 0.37 # Giving a gain for Chroma
-    gradient_image = sobel_filter(oklc_image, 'gradient')
+    oklab_image[..., 1:] = oklab_image[..., 1:] * + 0.5 # Normalize for a* and b*
+    oklabchroma_image = np.concatenate([oklab_image, oklch_image[..., 1:2]], axis=-1)
+    oklabchroma_image[..., 3] = oklabchroma_image[..., 3] / 0.37 # Giving a gain for Chroma
+    gradient_image = sobel_filter(oklabchroma_image, 'gradient')
+    write_image("outputs/gradient_image.png", gradient_image)
     return gradient_image
 
 def main():
@@ -23,8 +31,9 @@ def main():
     image1 = read_image("frame1.jpg")
     image1 = resize_image(image1, 100, 75)
     gradient_image1 = find_gradient(image1)
-    write_image("outputs/gradient_image1.png", gradient_image1)
-    blobs1 = blobize(image1, gradient_image1)
+    if DEBUG:
+        write_image("outputs/gradient_image1.png", gradient_image1)
+    blobs1 = blobize(image1, gradient_image1, debug=DEBUG)
     
     # Image 2
     image2 = read_image("frame2.jpg")
