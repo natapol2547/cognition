@@ -1,8 +1,13 @@
+from __future__ import annotations
+
 import os
-import sys
-import numpy as np
+from typing import TYPE_CHECKING, cast
+
 import cv2
-from dotenv import load_dotenv
+import numpy as np
+
+if TYPE_CHECKING:
+    from controller import Camera, Robot
 
 from utils.image import (
     gaussian_blur,
@@ -12,11 +17,12 @@ from utils.image import (
     resize_image,
     sobel_filter,
 )
+from utils.robot_func import load_webots_robot_class
 from utils.color_space import oklab_to_oklch, rgb_to_oklab, rgb_to_oklch
 from utils.blob import blobize, filter_blobs_by_pixel_count, get_blob_average_color_oklab, get_blob_by_color, group_blobs, is_blob_moving
 import time
 
-def find_gradient(image):
+def _find_gradient_oklch(image):
     blurred_image = gaussian_blur(image, 5)
     oklch_image = rgb_to_oklch(blurred_image)
     oklc_image = oklch_image[..., :2]
@@ -36,17 +42,9 @@ def find_gradient(image):
     gradient_image = sobel_filter(oklabchroma_image, 'gradient')
     return gradient_image
 
-load_dotenv()
 
-webots_home = os.getenv("WEBOTS_HOME")
-if not webots_home:
-    raise ValueError("WEBOTS_HOME not found in .env file!")
-
-sys.path.append(os.path.join(webots_home, 'lib', 'controller', 'python'))
-from controller import Robot
-
-def get_image(robot, width, height):
-    camera = robot.getDevice("cam")
+def get_image(robot: Robot, width: int, height: int) -> np.ndarray | None:
+    camera = cast("Camera", robot.getDevice("cam"))
     raw_image = camera.getImage()
     if raw_image:
         image_array = np.frombuffer(raw_image, np.uint8).reshape((height, width, 4))
@@ -55,13 +53,14 @@ def get_image(robot, width, height):
         return image_array
     return None
 
-def run_robot():
-    robot = Robot()
+def run_robot() -> None:
+    RobotClass = load_webots_robot_class()
+    robot = RobotClass()
     timestep = int(robot.getBasicTimeStep())
 
     previous_image = None
 
-    camera = robot.getDevice("cam")
+    camera = cast("Camera", robot.getDevice("cam"))
     camera.enable(timestep)
     
     width = camera.getWidth()
@@ -95,14 +94,14 @@ def run_robot():
         yellow_blob2 = get_blob_by_color(blobs2, (227, 212, 69), 0.1)
         goal_blob2 = get_blob_by_color(blobs2, (105, 212, 44), 0.1)
         
-        if yellow_blob2:
+        if yellow_blob1 and yellow_blob2:
             if is_blob_moving(yellow_blob1, yellow_blob2):
                 print("Yellow blob is moving")
             else:
                 print("Yellow blob is not moving")
         else:
             print("Yellow blob not found")
-        if goal_blob2:
+        if goal_blob1 and goal_blob2:
             if is_blob_moving(goal_blob1, goal_blob2):
                 print("Goal blob is moving")
             else:

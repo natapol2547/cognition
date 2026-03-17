@@ -45,6 +45,48 @@ def resize_image(image, new_w, new_h):
     
     return output
 
+def resize_bilinear(image, new_w, new_h):
+    old_h, old_w = image.shape[:2]
+    
+    if is_image_rgb(image):
+        output = np.zeros((new_h, new_w, image.shape[2]), dtype=image.dtype)
+    else:
+        output = np.zeros((new_h, new_w), dtype=image.dtype)
+    
+    for i in range(new_h):
+        for j in range(new_w):
+            src_i = i * old_h / new_h
+            src_j = j * old_w / new_w
+            
+            i0 = int(np.floor(src_i))
+            i1 = min(i0 + 1, old_h - 1)
+            j0 = int(np.floor(src_j))
+            j1 = min(j0 + 1, old_w - 1)
+            
+            di = src_i - i0
+            dj = src_j - j0
+            
+            if is_image_rgb(image):
+                top_left = image[i0, j0]
+                top_right = image[i0, j1]
+                bottom_left = image[i1, j0]
+                bottom_right = image[i1, j1]
+                
+                top = (1 - dj) * top_left + dj * top_right
+                bottom = (1 - dj) * bottom_left + dj * bottom_right
+                output[i, j] = (1 - di) * top + di * bottom
+            else:
+                top_left = image[i0, j0]
+                top_right = image[i0, j1]
+                bottom_left = image[i1, j0]
+                bottom_right = image[i1, j1]
+                
+                top = (1 - dj) * top_left + dj * top_right
+                bottom = (1 - dj) * bottom_left + dj * bottom_right
+                output[i, j] = (1 - di) * top + di * bottom
+    
+    return output
+
 def resize_uniform(image, ratio):
     new_h = int(image.shape[0] * ratio)
     new_w = int(image.shape[1] * ratio)
@@ -116,3 +158,39 @@ def image_to_binary(image, threshold=0.5):
     if image.dtype == 'uint8':
         image = image.astype(np.float64) / 255
     return (image > threshold).astype(np.uint8) * 255
+
+def anisotropic_gaussian_kernel(res, sigma_x=None, sigma_y=None):
+    A = 1
+    x0 = res[1] // 2
+    y0 = res[0] // 2
+
+    if sigma_x is None:
+        sigma_x = x0 / 4
+    if sigma_y is None:
+        sigma_y = y0 / 4
+
+    filter = np.zeros_like(np.zeros(res), dtype=np.float64)
+    for x in range(filter.shape[1]):
+        for y in range(filter.shape[0]):
+            filter[y, x] = A * np.exp(-(((x - x0) ** 2) / (2 * sigma_x ** 2) + ((y - y0) ** 2) / (2 * sigma_y ** 2)))
+    
+    return filter
+
+def apply_equivalent_filter(img,filter):
+    if img.shape != filter.shape:
+        raise ValueError("Image and filter must have the same shape, but got {} and {}".format(img.shape, filter.shape))
+    
+    output = np.zeros_like(img, dtype=np.float64)
+    for i in range(img.shape[1]):
+        for j in range(img.shape[0]):
+            output[j, i] = img[j, i] * filter[j, i]
+    return output
+
+
+# if __name__ == "__main__":
+#     img = read_image("Depth_camera_outputs/depth_camera_image_3.jpg")
+#     gray = rgb_to_gray(img)
+#     filter = anisotropic_gaussian_kernel(gray)
+#     write_image("anisotropic_gaussian_filter.jpg", filter / np.max(filter) * 255)
+#     output = apply_equivalent_filter(gray, filter)
+#     write_image("equivalent_filter_output.jpg", output)
