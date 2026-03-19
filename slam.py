@@ -1,50 +1,55 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
-
+from typing import TYPE_CHECKING
 import cv2
 
-if TYPE_CHECKING:
-    from controller import Keyboard, Lidar, Motor, PositionSensor, Robot
+from mapping.kinematics import DiffDriveOdometry, calculate_diff_drive_velocities
+from mapping.grid import OccupancyGrid
 
-from utils.kinematics import DiffDriveOdometry, calculate_diff_drive_velocities
-from utils.map import OccupancyGrid
-from utils.robot_func import (
-    load_webots_robot_class,
-    set_position,
-    set_velocity,
-    stop_robot,
-)
+from devices.motor import MotorActuator
+from devices.encoder import EncoderSensor
+from devices.lidar import LidarSensor
+from devices.compass import CompassSensor
+
+from utils.keyboard import WebotsKeyboard
+from utils.robot import get_webots_robot
 
 LINEAR_SPEED = 0.1  # m/s
 ANGULAR_SPEED = 2.0  # rad/s
 
+def stop_robot(wheels: list[MotorActuator]) -> None:
+    for wheel in wheels:
+        wheel.stop()
+
+def set_velocity(wheels: list[MotorActuator], velocity: list[float]) -> None:
+    for wheel, vel in zip(wheels, velocity):
+        wheel.setVelocity(vel)
 
 def run_robot() -> None:
-    RobotClass = load_webots_robot_class()
-    robot: Robot = RobotClass()
+    robot = get_webots_robot()
     timestep = int(robot.getBasicTimeStep())
 
-    left_motor = cast("Motor", robot.getDevice("left wheel motor"))
-    right_motor = cast("Motor", robot.getDevice("right wheel motor"))
-    wheels: list[Motor] = [left_motor, right_motor]
-    set_position(wheels, [float("inf")] * 2)
-    stop_robot(wheels)
+    # Motors and encoders
+    left_motor = MotorActuator(robot, "left wheel motor")
+    right_motor = MotorActuator(robot, "right wheel motor")
+    wheels: list[MotorActuator] = [left_motor, right_motor]
 
-    left_encoder = cast("PositionSensor", robot.getDevice("left wheel sensor"))
-    right_encoder = cast("PositionSensor", robot.getDevice("right wheel sensor"))
-    left_encoder.enable(timestep)
-    right_encoder.enable(timestep)
-
-    lidar = cast("Lidar", robot.getDevice("lidar"))
-    lidar.enable(timestep)
+    left_encoder = EncoderSensor(robot, "left wheel sensor")
+    right_encoder = EncoderSensor(robot, "right wheel sensor")
+    
+    # Compass
+    compass = CompassSensor(robot)
+    
+    # Lidar
+    lidar = LidarSensor(robot)
     lidar_fov = lidar.getFov()
     lidar_max_range = lidar.getMaxRange()
 
-    keyboard = cast("Keyboard", robot.getKeyboard())
-    keyboard.enable(timestep)
+    # Keyboard
+    keyboard = WebotsKeyboard(robot)
 
-    odometry = DiffDriveOdometry()
+    # Odometry and grid
+    odometry = DiffDriveOdometry(left_encoder, right_encoder, compass)
     grid = OccupancyGrid(size=400, resolution=0.03)
 
     print("SLAM running. Use WS to move, AD to rotate. Press 'X' to quit.")
@@ -72,7 +77,7 @@ def run_robot() -> None:
         velocities = calculate_diff_drive_velocities(vx, w)
         set_velocity(wheels, velocities)
 
-        odometry.update(left_encoder.getValue(), right_encoder.getValue())
+        odometry.update()
         pose = odometry.get_pose()
 
         ranges = lidar.getRangeImage()

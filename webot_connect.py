@@ -17,7 +17,7 @@ from utils.image import (
     resize_image,
     sobel_filter,
 )
-from utils.robot_func import load_webots_robot_class
+from utils.robot_func import get_webots_robot
 from utils.color_space import oklab_to_oklch, rgb_to_oklab, rgb_to_oklch
 from utils.blob import blobize, filter_blobs_by_pixel_count, get_blob_average_color_oklab, get_blob_by_color, group_blobs, is_blob_moving
 import time
@@ -54,7 +54,7 @@ def get_image(robot: Robot, width: int, height: int) -> np.ndarray | None:
     return None
 
 def run_robot() -> None:
-    RobotClass = load_webots_robot_class()
+    RobotClass = get_webots_robot()
     robot = RobotClass()
     timestep = int(robot.getBasicTimeStep())
 

@@ -1,12 +1,12 @@
-from utils.image import (
+from cv.image import (
     gaussian_blur,
     read_image,
     write_image,
     resize_image,
     sobel_filter,
 )
-from utils.color_space import rgb_to_oklab, rgb_to_oklch
-from utils.blob import blobize, group_blobs
+from cv.color_space import rgb_to_oklab, rgb_to_oklch
+from cv.blob import blobize, group_blobs
 
 import numpy as np
 import time

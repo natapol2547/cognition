@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import math
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from devices.compass import CompassSensor
+    from devices.encoder import EncoderSensor
+
 WHEEL_RADIUS = 0.0205  # e-puck wheel radius [m]
 AXLE_LENGTH = 0.052    # distance between left and right wheels [m]
 
@@ -16,23 +22,33 @@ def calculate_diff_drive_velocities(vx: float, w: float) -> list[float]:
     """
     half_axle = AXLE_LENGTH / 2.0
     return [
-        vx - w * half_axle,
-        vx + w * half_axle,
+        (vx - w * half_axle) / WHEEL_RADIUS,
+        (vx + w * half_axle) / WHEEL_RADIUS,
     ]
 
 
 class DiffDriveOdometry:
     """Dead-reckoning pose estimator for a differential-drive robot."""
 
-    def __init__(self) -> None:
+    def __init__(self, left_encoder: EncoderSensor, right_encoder: EncoderSensor, compass: CompassSensor|None = None) -> None:
         self.x = 0.0
         self.y = 0.0
         self.theta = 0.0
         self._prev_left: float | None = None
         self._prev_right: float | None = None
+        self.left_encoder = left_encoder
+        self.right_encoder = right_encoder
+        self.compass = compass
 
-    def update(self, left_pos: float, right_pos: float) -> None:
+    def update(self) -> None:
         """Update the pose estimate from current wheel encoder positions (radians)."""
+        left_pos = self.left_encoder.getValue()
+        right_pos = self.right_encoder.getValue()
+        
+        if self.compass is not None:
+            compass_values = self.compass.getValues()
+            self.theta = math.atan2(compass_values[1], compass_values[0]) * -1
+
         if self._prev_left is None or self._prev_right is None:
             self._prev_left = left_pos
             self._prev_right = right_pos
@@ -44,13 +60,13 @@ class DiffDriveOdometry:
         self._prev_right = right_pos
 
         dc = (dl + dr) / 2.0
-        dtheta = ROTATION_SIGN * (dr - dl) / AXLE_LENGTH
+        
+        if self.compass is None:
+            dtheta = ROTATION_SIGN * (dr - dl) / AXLE_LENGTH
+            self.theta += dtheta
 
-        # Use midpoint angle for position update to reduce error when rotating.
-        theta_mid = self.theta + 0.5 * dtheta
-        self.theta += dtheta
-        self.x += dc * math.cos(theta_mid)
-        self.y += dc * math.sin(theta_mid)
+        self.x += dc * math.cos(self.theta)
+        self.y += dc * math.sin(self.theta)
 
     def get_pose(self) -> tuple[float, float, float]:
         return self.x, self.y, self.theta
