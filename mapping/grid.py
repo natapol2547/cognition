@@ -13,21 +13,28 @@ class OccupancyGrid:
     CLAMP_MIN = -5.0
     CLAMP_MAX = 5.0
 
-    def __init__(self, size: int = 400, resolution: float = 0.01) -> None:
-        self.size = size
+    def __init__(
+        self,
+        world_min: tuple[float, float] = (-2.0, -2.0),
+        world_max: tuple[float, float] = (2.0, 2.0),
+        resolution: float = 0.01,
+    ) -> None:
+        self.world_min = world_min
+        self.world_max = world_max
         self.resolution = resolution
-        self.grid = np.zeros((size, size), dtype=np.float64)
-        self.origin = size // 2
+        self.width = int(math.ceil((world_max[0] - world_min[0]) / resolution))
+        self.height = int(math.ceil((world_max[1] - world_min[1]) / resolution))
+        self.grid = np.zeros((self.height, self.width), dtype=np.float64)
 
     def _world_to_grid(self, wx: float, wy: float) -> tuple[int, int]:
-        gx = int(round(wx / self.resolution)) + self.origin
-        gy = int(round(wy / self.resolution)) + self.origin
+        gx = int(round((wx - self.world_min[0]) / self.resolution))
+        gy = int(round((wy - self.world_min[1]) / self.resolution))
         # Webot coordinates are inverted
-        gy = self.size - gy
+        gy = self.height - gy
         return gx, gy
 
     def _in_bounds(self, gx: int, gy: int) -> bool:
-        return 0 <= gx < self.size and 0 <= gy < self.size
+        return 0 <= gx < self.width and 0 <= gy < self.height
 
     def update(
         self,
