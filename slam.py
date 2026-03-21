@@ -50,7 +50,7 @@ def run_robot() -> None:
 
     # Odometry and grid
     odometry = DiffDriveOdometry(left_encoder, right_encoder, compass)
-    grid = OccupancyGrid(world_min=(-4.0, -4.0), world_max=(2.0, 2.0), resolution=0.01)
+    grid = OccupancyGrid(world_min=(-4.0, -4.0), world_max=(2.0, 2.0), resolution=0.02)
 
     print("SLAM running. Use WS to move, AD to rotate. Press 'X' to quit.")
 
