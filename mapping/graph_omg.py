@@ -166,7 +166,7 @@ class GraphSLAM:
 
     def optimize(
         self,
-        iterations: int = 10,
+        iterations: int = 2,
         anchor_weight: float = 1e6,
         verbose: bool = False,
     ) -> list[float]:
@@ -285,6 +285,109 @@ def scan_to_points(
     return np.stack([r * np.cos(a), r * np.sin(a)], axis=1)
 
 
+def filter_ranges_for_storage(
+    ranges,
+    prev_ranges_list,
+    diff_threshold: float = 0.005,
+) -> np.ndarray:
+    """Mark dynamic ranges as NaN to filter them for storage.
+    
+    Returns a copy of ranges with dynamic beams set to NaN. These filtered ranges
+    can be stored and later converted to points via scan_to_points, which will
+    automatically skip the NaN values (dynamic returns).
+    
+    Args:
+        ranges: Current scan ranges
+        prev_ranges_list: List of previous scan arrays for voting
+        diff_threshold: Range change threshold to mark as dynamic
+    
+    Returns:
+        Filtered range array with NaN for dynamic beams
+    """
+    ranges = np.asarray(ranges, dtype=float)
+    
+    if prev_ranges_list is None or len(prev_ranges_list) == 0:
+        return ranges
+    
+    if ranges.size == 0:
+        return ranges
+    
+    filtered = ranges.copy()
+    
+    # Vote-based dynamic detection: require change in 2+ frames
+    dynamic_votes = np.zeros(len(ranges), dtype=int)
+    
+    for prev_ranges in prev_ranges_list:
+        prev_ranges = np.asarray(prev_ranges, dtype=float)
+        if prev_ranges.size == 0 or prev_ranges.shape != ranges.shape:
+            continue
+        
+        # Count frames where this beam changed significantly
+        changed = np.isfinite(prev_ranges) & (np.abs(filtered - prev_ranges) > diff_threshold)
+        dynamic_votes += changed.astype(int)
+    
+    # Mark as dynamic if changed in 2 or more previous frames
+    dynamic = dynamic_votes >= 2
+    filtered[dynamic] = np.nan
+    
+    return filtered
+
+
+def scan_to_points_with_dynamic_filter(
+    ranges,
+    prev_ranges_list,
+    fov: float,
+    max_range: Optional[float] = None,
+    diff_threshold: float = 0.0001
+) -> np.ndarray:
+    """Convert lidar ranges to points while masking likely dynamic returns.
+
+    Compares current scan with multiple previous frames (up to 3). A beam is marked
+    as dynamic only if it changes significantly in at least 2 out of the available
+    previous frames (voting mechanism for robustness).
+    
+    Args:
+        ranges: Current scan ranges
+        prev_ranges_list: List of previous scan arrays [prev_frame_1, prev_frame_2, ...]
+        fov: Field of view
+        max_range: Maximum range threshold
+        diff_threshold: Range change threshold to mark as dynamic
+    """
+    ranges = np.asarray(ranges, dtype=float)
+    
+    # If no previous frames or empty current scan, return unfiltered
+    if prev_ranges_list is None or len(prev_ranges_list) == 0:
+        return scan_to_points(ranges, fov, max_range)
+    
+    if ranges.size == 0:
+        return scan_to_points(ranges, fov, max_range)
+
+    filtered = ranges.copy()
+    valid = np.isfinite(filtered) & (filtered > 0)
+
+    if max_range is not None:
+        valid &= filtered < max_range
+
+    # Vote-based dynamic detection: require change in 2+ frames
+    dynamic_votes = np.zeros(len(ranges), dtype=int)
+    
+    for prev_ranges in prev_ranges_list:
+        prev_ranges = np.asarray(prev_ranges, dtype=float)
+        if prev_ranges.size == 0 or prev_ranges.shape != ranges.shape:
+            continue
+        
+        # Count frames where this beam changed significantly
+        changed = np.isfinite(prev_ranges) & (np.abs(filtered - prev_ranges) > diff_threshold)
+        dynamic_votes += changed.astype(int)
+    
+    # Mark as dynamic if changed in 2 or more previous frames
+    dynamic = dynamic_votes >= 2
+    filtered[dynamic] = np.nan
+
+    return scan_to_points(filtered, fov, max_range)
+
+
+
 # ---------------------------------------------------------------------------
 # Online session driver
 # ---------------------------------------------------------------------------
@@ -316,7 +419,7 @@ class GraphSession:
         lidar_max_range: Optional[float] = None,
         odom_weight: float = 1.0,
         loop_weight: float = 5.0,
-        optimize_iterations: int = 10,
+        optimize_iterations: int = 2,
     ) -> None:
         self.node_dist_thresh = node_dist_thresh
         self.node_angle_thresh = node_angle_thresh
@@ -364,6 +467,7 @@ class GraphSession:
         node = self.graph.nodes.get(node_id)
         if node is None or node.scan is None:
             return None
+        # Node scans are already filtered (NaN for dynamic), just convert to points
         pts = scan_to_points(node.scan, self.lidar_fov, self.lidar_max_range)
         self._scan_points_cache[node_id] = pts
         return pts

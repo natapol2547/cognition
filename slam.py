@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from typing import Optional
 
 import cv2
 import numpy as np
 
 from mapping.kinematics import DiffDriveOdometry, calculate_diff_drive_velocities
-from mapping.graph_omg import GraphSession, GraphSLAM, scan_to_points
+from mapping.graph_omg import GraphSession, GraphSLAM, scan_to_points, scan_to_points_with_dynamic_filter, filter_ranges_for_storage
 
 from devices.motor import MotorActuator
 from devices.encoder import EncoderSensor
@@ -18,7 +19,7 @@ from utils.keyboard import WebotsKeyboard
 from utils.robot import get_supervisor, get_webots_robot
 
 LINEAR_SPEED = 0.3  # m/s
-ANGULAR_SPEED = 2.0  # rad/s
+ANGULAR_SPEED = 1.0  # rad/s
 
 PANEL_SIZE = 600
 
@@ -51,8 +52,14 @@ def render_lidar_scan(
     fov: float,
     max_range: float = 2.0,
     size: int = 360,
+    prev_ranges_list: Optional[list[np.ndarray]] = None,
 ) -> np.ndarray:
-    """Robot-centered top-down view of a single lidar scan."""
+    """Robot-centered top-down view of a single lidar scan.
+    
+    Shows filtered points (cyan) and highlights dynamic returns (red) that were
+    filtered out when prev_ranges_list is provided. Uses voting across multiple
+    frames for robust dynamic detection.
+    """
     img = np.zeros((size, size, 3), dtype=np.uint8)
     cx = cy = size // 2
     scale = (size / 2 - 10) / max(max_range, 1e-6)
@@ -61,19 +68,56 @@ def render_lidar_scan(
     cv2.circle(img, (cx, cy), int(0.5 * max_range * scale), (40, 40, 40), 1, cv2.LINE_AA)
     cv2.line(img, (cx, cy), (int(cx + 0.5 * max_range * scale), cy), (80, 80, 80), 1)
 
-    pts = scan_to_points(ranges, fov, max_range=max_range)
-    for p in pts:
+    # Get filtered points (dynamic objects removed via multi-frame voting)
+    pts_filtered = scan_to_points_with_dynamic_filter(ranges, prev_ranges_list, fov, max_range=max_range)
+    for p in pts_filtered:
         px = int(cx + p[0] * scale)
         py = int(cy - p[1] * scale)
         if 0 <= px < size and 0 <= py < size:
-            img[py, px] = (255, 255, 0)
+            img[py, px] = (0, 255, 255)  # Cyan for filtered/kept points
+
+    # If prev_ranges provided, show what was filtered out in red
+    if prev_ranges_list is not None and len(prev_ranges_list) > 0:
+        ranges_arr = np.asarray(ranges, dtype=float)
+        diff_threshold = 0.005
+        n = ranges_arr.size
+        angles = np.linspace(fov / 2.0, -fov / 2.0, n) if n > 1 else np.array([0.0])
+        
+        # Vote-based dynamic detection (same as in filter)
+        dynamic_votes = np.zeros(n, dtype=int)
+        for prev_ranges in prev_ranges_list:
+            prev_ranges_arr = np.asarray(prev_ranges, dtype=float)
+            if prev_ranges_arr.size == 0 or prev_ranges_arr.shape != ranges_arr.shape:
+                continue
+            changed = np.isfinite(prev_ranges_arr) & (np.abs(ranges_arr - prev_ranges_arr) > diff_threshold)
+            dynamic_votes += changed.astype(int)
+        
+        # Show beams with 2+ votes as dynamic (red)
+        dynamic = dynamic_votes >= 2
+        
+        for i in range(n):
+            if dynamic[i] and 0 < ranges_arr[i] < max_range:
+                r = ranges_arr[i]
+                a = angles[i]
+                x = r * np.cos(a)
+                y = r * np.sin(a)
+                px = int(cx + x * scale)
+                py = int(cy - y * scale)
+                if 0 <= px < size and 0 <= py < size:
+                    img[py, px] = (0, 0, 255)  # Red for filtered-out (dynamic) points
 
     cv2.circle(img, (cx, cy), 4, (0, 255, 0), -1)
     cv2.line(img, (cx, cy), (cx + 12, cy), (0, 255, 0), 1)
 
+    # Legend
     cv2.putText(
         img, f"lidar  fov={math.degrees(fov):.0f}deg  max={max_range:.1f}m",
-        (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA,
+        (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA,
+    )
+    num_frames = len(prev_ranges_list) if prev_ranges_list else 0
+    cv2.putText(
+        img, f"cyan=kept  red=filtered (voting: {num_frames} frames)",
+        (8, size - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.33, (255, 255, 255), 1, cv2.LINE_AA,
     )
     return img
 
@@ -312,8 +356,11 @@ def run_robot() -> None:
     end_pos = [val + add for val, add in zip(translation_field.getSFVec3f(), add_position)]
     
     # Total time for a full A -> B -> A cycle (in seconds)
-    cycle_time = 4.0             
+    cycle_time = 0.01         
     half_cycle = cycle_time / 2.0
+    
+    # Track sliding window of 2 previous scan frames for multi-frame dynamic filtering
+    _prev_raw_scans: deque = deque(maxlen=2)
 
     print("SLAM running. Use WS to move, AD to rotate. Press 'X' to quit.")
     print("Drive a loop; the graph is optimized on each loop closure (start-return or ICP match).")
@@ -371,7 +418,13 @@ def run_robot() -> None:
         ranges = lidar.getRangeImage()
         scan = np.asarray(ranges, dtype=float) if ranges is not None else None
 
-        optimized = session.step(pose_vec, scan)
+        # Filter scan to remove dynamic returns before storing in graph
+        if scan is not None and scan.size > 0:
+            filtered_scan = filter_ranges_for_storage(scan, list(_prev_raw_scans))
+        else:
+            filtered_scan = scan
+
+        optimized = session.step(pose_vec, filtered_scan)
         if optimized:
             tensions = session.last_tensions
             initial = tensions[0] if tensions else float("nan")
@@ -386,7 +439,9 @@ def run_robot() -> None:
 
         # Lidar visualization window.
         if scan is not None and scan.size > 0:
-            cv2.imshow("Lidar", render_lidar_scan(scan, lidar_fov, max_range=lidar_max_range))
+            cv2.imshow("Lidar", render_lidar_scan(scan, lidar_fov, max_range=lidar_max_range, prev_ranges_list=list(_prev_raw_scans)))
+            # Update the sliding window of previous scans
+            _prev_raw_scans.append(scan.copy())
 
         # Graph visualization: live on the left, after-optimization on the right.
         left_panel = render_graph(
