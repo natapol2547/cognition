@@ -10,6 +10,7 @@ dependencies = [
     "opencv-python>=4.13.0.92",
     "python-dotenv>=1.2.2",
     "scikit-image>=0.26.0",
+    "scikit-learn>=1.8.0",
     "webbot>=0.34",
 ]
 
