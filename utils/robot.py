@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from types import ModuleType
+from typing import TYPE_CHECKING, cast
 
 import os
 import sys
@@ -7,12 +8,11 @@ import importlib
 from dotenv import load_dotenv
 
 if TYPE_CHECKING:
-    from controller import Motor, Robot
+    from controller import Motor, Robot, Supervisor
 
 
-def get_webots_robot() -> Robot:
+def get_controller_module() -> ModuleType:
     load_dotenv()
-    """Resolve the WEBOTS_HOME path, add it to sys.path, and return the Robot class."""
     webots_home = os.getenv("WEBOTS_HOME")
     if not webots_home:
         raise ValueError("WEBOTS_HOME not found in .env file!")
@@ -20,6 +20,13 @@ def get_webots_robot() -> Robot:
     controller_path = os.path.join(webots_home, "lib", "controller", "python")
     if controller_path not in sys.path:
         sys.path.append(controller_path)
+    return importlib.import_module("controller")
 
-    controller = importlib.import_module("controller")
-    return controller.Robot()
+
+def get_webots_robot() -> "Robot":
+    controller = get_controller_module()
+    return cast("Robot", controller.Robot())
+
+def get_supervisor() -> "Supervisor":
+    controller = get_controller_module()
+    return cast("Supervisor", controller.Supervisor())

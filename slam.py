@@ -15,7 +15,7 @@ from devices.lidar import LidarSensor
 from devices.compass import CompassSensor
 
 from utils.keyboard import WebotsKeyboard
-from utils.robot import get_webots_robot
+from utils.robot import get_supervisor, get_webots_robot
 
 LINEAR_SPEED = 0.3  # m/s
 ANGULAR_SPEED = 2.0  # rad/s
@@ -31,6 +31,15 @@ def stop_robot(wheels: list[MotorActuator]) -> None:
 def set_velocity(wheels: list[MotorActuator], velocity: list[float]) -> None:
     for wheel, vel in zip(wheels, velocity):
         wheel.setVelocity(vel)
+
+
+def lerp(start, end, t):
+    """Linear interpolation between two single values."""
+    return start + (end - start) * t
+
+def lerp_3d(start_pos, end_pos, t):
+    """Applies lerp to a 3D coordinate list [x, y, z]."""
+    return [lerp(start_pos[i], end_pos[i], t) for i in range(3)]
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +273,7 @@ def _blank_after_panel(size: int) -> np.ndarray:
 
 def run_robot() -> None:
     robot = get_webots_robot()
+    supervisor = get_supervisor()
     timestep = int(robot.getBasicTimeStep())
 
     left_motor = MotorActuator(robot, "left wheel motor")
@@ -288,11 +298,50 @@ def run_robot() -> None:
         lidar_fov=lidar_fov,
         lidar_max_range=lidar_max_range,
     )
+    
+    # Object
+    target_node = supervisor.getFromDef('BALL')
+    if target_node is None:
+        print("Error: Node 'BALL' not found in the scene tree!")
+        return
+        
+    translation_field = target_node.getField('translation')
+    
+    add_position = [0.5, 0.0, 0.0]
+    start_pos = translation_field.getSFVec3f()
+    end_pos = [val + add for val, add in zip(translation_field.getSFVec3f(), add_position)]
+    
+    # Total time for a full A -> B -> A cycle (in seconds)
+    cycle_time = 4.0             
+    half_cycle = cycle_time / 2.0
 
     print("SLAM running. Use WS to move, AD to rotate. Press 'X' to quit.")
     print("Drive a loop; the graph is optimized on each loop closure (start-return or ICP match).")
 
     while robot.step(timestep) != -1:
+        # Ball
+        # Get current elapsed simulation time
+        current_time = supervisor.getTime()
+        
+        # Determine where we are in the current cycle (bounds: 0.0 to cycle_time)
+        time_in_cycle = current_time % cycle_time
+        
+        # Calculate the interpolation factor 't' (0.0 to 1.0)
+        if time_in_cycle < half_cycle:
+            # First half: Moving from start_pos to end_pos
+            t = time_in_cycle / half_cycle
+        else:
+            # Second half: Moving back from end_pos to start_pos
+            # We invert the math so 't' goes from 1.0 back down to 0.0
+            t = 1.0 - ((time_in_cycle - half_cycle) / half_cycle)
+            
+        # Calculate the new 3D position using our lerp function
+        new_position = lerp_3d(start_pos, end_pos, t)
+        
+        # Apply the new coordinates to the object
+        translation_field.setSFVec3f(new_position)
+        
+        # Robot
         vx, w = 0.0, 0.0
 
         key = keyboard.getKey()
